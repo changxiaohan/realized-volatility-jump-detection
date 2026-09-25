@@ -1,0 +1,1154 @@
+---
+title: "ETX5460 Project 2"
+author: "chang xiaohan"
+date: "2026-09-21"
+output:
+  html_document:
+    df_print: default
+    toc: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo       = TRUE,      # show the code (set FALSE for an output-only report)
+  warning    = FALSE,
+  message    = FALSE,
+  fig.width  = 8,
+  fig.height = 5,
+  fig.align  = "center"
+)
+```
+
+```{r packages, include=FALSE}
+# Install once if needed (skip if already installed):
+# install.packages(c("readxl", "dplyr", "tidyr", "ggplot2", "moments",
+#                    "lubridate", "fracdiff", "rugarch", "gridExtra"))
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(moments)
+library(lubridate)     # force_tz()
+library(fracdiff)      # fracdiff()
+library(rugarch)       # ugarchspec() / ugarchfit()
+library(grid)          # grid.table()
+library(gridExtra)     # tableGrob() / grid.arrange()
+```
+
+```{r helpers, include=FALSE}
+# ============================================================
+# Helper: render a data frame as a table IMAGE
+# ------------------------------------------------------------
+# Why: text output from print() is split by knitr into many small
+# "##" boxes, which is hard to read. Rendering the table as a
+# graphic gives one clean, aligned table per question.
+# ------------------------------------------------------------
+# transpose = TRUE  -> first column becomes the column names and the
+#                      remaining columns are transposed, so that each
+#                      statistic becomes a row (good for wide tables
+#                      such as summary statistics of several series).
+tab_fig <- function(df, title = "", transpose = TRUE,
+                    digits = 4, base_size = 8) {
+  df <- as.data.frame(df)
+  for (j in seq_along(df)) {
+    if (is.numeric(df[[j]])) df[[j]] <- round(df[[j]], digits)
+  }
+
+  if (transpose && ncol(df) > 1 && !is.numeric(df[[1]])) {
+    rn <- as.character(df[[1]])
+    m  <- as.data.frame(t(as.matrix(df[, -1, drop = FALSE])))
+    names(m) <- rn
+  } else {
+    m <- df
+  }
+
+  tg <- tableGrob(m, theme = ttheme_minimal(base_size = base_size))
+
+  grid.arrange(
+    tg,
+    top = if (nzchar(title))
+      textGrob(title, gp = gpar(fontsize = 11, fontface = "bold")) else NULL
+  )
+}
+
+# Helper: print a named numeric vector as ONE single text block
+# (avoids knitr splitting the output into several boxes)
+show_vec <- function(x, title = "", digits = 4) {
+  x <- round(x, digits)
+  txt <- paste0("  ", format(names(x), justify = "left"), " = ", as.character(x))
+  cat(paste(c(if (nzchar(title)) title, txt, ""), collapse = "\n"))
+}
+```
+
+# Question 1
+
+## Question 1 (a) and (b)
+
+```{r q1ab}
+# ---------------------------------------------------------------------------
+# 1(a) Simulate one sample path of  dX_t = dt + 3 dB_t  on the interval [3, 5]
+# ---------------------------------------------------------------------------
+# The SDE is a GENERALISED WIENER PROCESS (arithmetic Brownian motion) with a
+# constant drift mu = 1 and a constant diffusion sigma = 3.  Because the
+# coefficients do not depend on X_t or on t, the process has the exact solution
+#       X_t = X_3 + (t - 3) + 3 (B_t - B_3),
+# and therefore the increment over a step of length dt is
+#       dX_i ~ i.i.d. N(mu * dt, sigma^2 * dt) = N(dt, 9 dt).
+# We simulate those increments directly: this is exact in distribution for any
+# finite dt, so the only approximation is the resolution of the time grid.
+
+set.seed(123)                  # reproducibility
+
+t0 <- 3                        # start time
+t1 <- 5                        # end time
+n  <- 20000                    # number of increments on [3, 5]
+dt <- (t1 - t0) / n            # time step = 0.0001
+t_grid <- t0 + (0:n) * dt      # time grid t_0, ..., t_n   (n + 1 points)
+
+Z  <- rnorm(n)                 # Z_i ~ N(0, 1)
+dX <- dt + 3 * sqrt(dt) * Z    # dX_i = dt + 3 * sqrt(dt) * Z_i  ~ N(dt, 9dt)
+X  <- c(1, 1 + cumsum(dX))     # start from X_3 = 1 and accumulate  (n + 1 points)
+
+plot(t_grid, X, type = "l", lwd = 1, col = "grey30",
+     xlab = "t", ylab = expression(X[t]),
+     main = "Question 1(a),(b): simulated path, theoretical mean and 95% bands")
+
+# ---------------------------------------------------------------------------
+# 1(b) Theoretical conditional mean and 95% pointwise bands
+# ---------------------------------------------------------------------------
+# Taking expectation and variance of the exact solution, conditional on X_3:
+#       E(X_t | X_3 = 1)   = 1 + (t - 3)
+#       Var(X_t | X_3 = 1) = 9 (t - 3)
+# The variance grows LINEARLY with elapsed time, so the bands widen as t
+# increases - they "fan out" rather than staying parallel.
+m     <- 1 + (t_grid - t0)     # conditional mean
+v     <- 9 * (t_grid - t0)     # conditional variance
+upper <- m + 1.96 * sqrt(v)
+lower <- m - 1.96 * sqrt(v)
+
+lines(t_grid, m,     col = "red",  lwd = 2)
+lines(t_grid, upper, col = "blue", lty = 2, lwd = 1.5)
+lines(t_grid, lower, col = "blue", lty = 2, lwd = 1.5)
+
+legend("topleft",
+       legend = c("sample path", "theoretical mean", "pointwise 95% bands"),
+       col    = c("grey30", "red", "blue"),
+       lty    = c(1, 1, 2),
+       lwd    = c(1, 2, 1.5),
+       bty    = "n")
+```
+
+**Answer (a).** The interval is $[3,5]$ with $n=20000$ equally spaced increments, so the time step is
+$\Delta t=(5-3)/20000=0.0001$ and the time grid is $t_i=3+i\Delta t$, $i=0,1,\dots,20000$.
+The model is the generalised Brownian motion $dX_t=dt+3\,dB_t$. Over a small interval
+$\Delta X_i=X_{t_i}-X_{t_{i-1}}=\Delta t+3\,\Delta B_i$ with
+$\Delta B_i\sim N(0,\Delta t)$. Writing $\Delta B_i=\sqrt{\Delta t}\,Z_i$, $Z_i\sim N(0,1)$ independent,
+gives $\Delta X_i=\Delta t+3\sqrt{\Delta t}\,Z_i$, and starting from $X_3=1$ the path is built as
+$X_{t_i}=1+\sum_{j=1}^{i}\Delta X_j$. With $\Delta t=10^{-4}$ the simulated path is visually continuous,
+as expected since the increments are independent $N(\mu\Delta t,\sigma^2\Delta t)$.
+
+**Answer (b).** Integrating the SDE from $3$ to $t$ gives
+$X_t-X_3=(t-3)+3(B_t-B_3)$, hence $X_t=1+(t-3)+3(B_t-B_3)$. Since $B_t-B_3\sim N(0,t-3)$,
+$$\mathbb{E}(X_t\mid X_3=1)=t-2,\qquad \operatorname{Var}(X_t\mid X_3=1)=9(t-3),$$
+so $X_t\mid X_3=1\sim N\big(t-2,\,9(t-3)\big)$ [Week 5 §3.4, with $\mu=1$, $\sigma=3$ and elapsed time $t-3$].
+
+The simulated path fluctuates around the theoretical mean line $t-2$, and its deviations from that line widen as $t$ increases. This is because the conditional variance is proportional to elapsed time, $\operatorname{Var}=9(t-3)$,
+so the pointwise bands $\pm1.96\sqrt{9(t-3)}$ fan out from $t=3$ to $t=5$. Near $t=3$ the band is very
+narrow and the path is almost forced through the mean; by $t=5$ the band is much wider, so a single path may
+deviate noticeably from the mean while still lying inside the bands. By construction roughly 95% of the path
+lies inside the bands.
+
+## Question 1 (c)
+
+```{r q1c}
+# ---------------------------------------------------------------------------
+# 1(c) 500 independent paths: the terminal distribution of X_5
+# ---------------------------------------------------------------------------
+# Every path is generated on the SAME time grid as in 1(a); only the random
+# shocks differ.  Storing the draws in an n x 500 matrix lets us build all the
+# paths with a single call to rnorm() and obtain the terminal values with a
+# column sum, which is far faster than a loop over paths.
+set.seed(1)                    # a different seed, so these paths differ from (a)
+n_paths <- 500
+
+Zmat  <- matrix(rnorm(n * n_paths), nrow = n, ncol = n_paths)  # n x 500 shocks
+dXmat <- dt + 3 * sqrt(dt) * Zmat                              # increments
+X5    <- 1 + colSums(dXmat)     # terminal value on each path
+
+sim_mean  <- mean(X5)
+sim_var   <- var(X5)
+theo_mean <- 3                  # E(X_5 | X_3 = 1) = 1 + (5 - 3)
+theo_var  <- 18                 # Var(X_5 | X_3 = 1) = 9 * (5 - 3)
+theo_sd   <- sqrt(theo_var)
+
+# ---- 95% CI for the mean ----
+alpha   <- 0.05
+z_crit  <- qnorm(1 - alpha / 2)
+se_mean <- sqrt(theo_var / n_paths)
+ci_mean <- c(sim_mean - z_crit * se_mean, sim_mean + z_crit * se_mean)
+
+# ---- 95% CI for the variance (exact chi-square interval) ----
+df_var   <- n_paths - 1
+chi_low  <- qchisq(alpha / 2,     df_var)
+chi_high <- qchisq(1 - alpha / 2, df_var)
+ci_var   <- c(df_var * sim_var / chi_high, df_var * sim_var / chi_low)
+
+# ---- Results table as an image ----
+res_q1c <- data.frame(
+  Quantity = c("Simulated mean", "Simulated variance",
+               "Theoretical mean", "Theoretical variance",
+               "95% CI for mean (lower)", "95% CI for mean (upper)",
+               "95% CI for variance (lower)", "95% CI for variance (upper)"),
+  Value = c(sim_mean, sim_var, theo_mean, theo_var,
+            ci_mean[1], ci_mean[2], ci_var[1], ci_var[2])
+)
+tab_fig(res_q1c, title = "Question 1(c): simulated vs theoretical moments of X5",
+        transpose = FALSE, digits = 4, base_size = 10)
+
+cat("\nTheoretical mean inside its 95% CI?  ",
+    ifelse(theo_mean >= ci_mean[1] && theo_mean <= ci_mean[2], "YES", "NO"), "\n")
+cat("Theoretical variance inside its 95% CI?  ",
+    ifelse(theo_var >= ci_var[1] && theo_var <= ci_var[2], "YES", "NO"), "\n")
+```
+
+```{r q1c-hist}
+# ---------------------------------------------------------------------------
+# Histogram of the simulated terminal values vs the theoretical density
+# ---------------------------------------------------------------------------
+# Under the model X_5 is EXACTLY normal, so the histogram should follow the
+# N(3, 18) curve; any departure is finite-sample simulation error, not model
+# error.
+hist(X5, probability = TRUE, breaks = 35, col = "lightblue",
+     main = "Question 1(c): simulated X5 with theoretical N(3,18) density",
+     xlab = expression(X[5]), ylab = "Density")
+
+curve(dnorm(x, mean = theo_mean, sd = theo_sd),
+      add = TRUE, col = "red", lwd = 2)
+
+legend("topright",
+       legend = c("Simulated X5", "Theoretical N(3,18) density"),
+       col    = c("lightblue", "red"),
+       lwd    = c(10, 2),
+       bty    = "n")
+```
+
+**Answer (c).** Setting $t=5$ in the expression from part (b):
+$X_5=1+2+3(B_5-B_3)=3+3(B_5-B_3)$ with $B_5-B_3\sim N(0,2)$, so $3(B_5-B_3)\sim N(0,18)$ and
+$$X_5\mid X_3=1\ \sim\ N(3,\,18).$$
+The table above reports the simulated mean and variance of the 500 terminal values alongside the theoretical
+values and two 95% confidence intervals: $\bar X\pm1.96\sqrt{18/500}$ for the mean.
+
+The figure shows the histogram of the simulated $X_5$ with the theoretical $N(3,18)$ density superimposed.
+The simulated distribution is broadly consistent with the theoretical normal density, although with only 500
+paths the histogram is not perfectly smooth and some bins deviate from the curve. Using different random seeds
+can occasionally produce a sample mean or variance outside its interval; this reflects simulation error at
+$n=500$, and error would diminish with more paths.
+
+---
+
+# Question 2
+
+```{r q2-helpers, include=FALSE}
+# Summary-statistics helper: always returns the same 15 columns
+# (so that rbind() across series works)
+summ_one <- function(x, name) {
+  x <- x[is.finite(x)]
+  data.frame(
+    Series = name, N = length(x),
+    Mean = mean(x), SD = sd(x), Var = var(x),
+    Min = min(x),
+    Q1 = as.numeric(quantile(x, 0.25)),
+    Median = median(x),
+    Q3 = as.numeric(quantile(x, 0.75)),
+    Max = max(x),
+    Skew = moments::skewness(x),
+    Kurt = moments::kurtosis(x),
+    Zero = mean(x == 0),
+    Neg  = mean(x < 0),
+    Pos  = mean(x > 0),
+    row.names = NULL
+  )
+}
+
+# ACF helper
+get_acf_tbl <- function(x, name, lag.max = 10) {
+  x <- x[is.finite(x)]
+  a <- acf(x, lag.max = lag.max, plot = FALSE)
+  out <- as.data.frame(t(as.numeric(a$acf)))
+  names(out) <- paste0("lag", as.numeric(a$lag))
+  cbind(Series = name, out, row.names = NULL)
+}
+```
+
+## Question 2 (a)
+
+```{r q2a}
+# ---------------------------------------------------------------------------
+# 2(a) Within-day 5-minute log returns and the jump contributions J1, J2, J3
+# ---------------------------------------------------------------------------
+# ECONOMIC BACKGROUND.  Quadratic variation decomposes into a continuous part
+# (integrated variance, IV) and a jump part:
+#       QV  =  IV  +  sum of squared jumps.
+# Realized variance (RV) estimates the whole of QV, whereas bipower variation
+# (BV) is built from products of ADJACENT returns and is therefore robust to
+# isolated jumps, so it estimates IV alone.  Their difference isolates the jump
+# component of variation.
+file <- "data/mdtx_intraday_prices.xlsx"
+
+prices_1m  <- read_excel(file, sheet = "1minute")
+prices_5m  <- read_excel(file, sheet = "5minute")
+prices_30m <- read_excel(file, sheet = "30minute")
+
+# ---- Timestamp handling ---------------------------------------------------
+# The raw timestamps are recorded in US Eastern Time (market local time).
+# force_tz() attaches the correct zone WITHOUT shifting the clock time, which
+# fixes the common artefact of 09:30-16:00 being displayed as 05:30-12:00.
+clean_time <- function(df) {
+  df %>%
+    mutate(
+      timestamp = force_tz(as.POSIXct(timestamp), tzone = "America/New_York"),
+      date      = as.Date(timestamp, tz = "America/New_York"),
+      time      = format(timestamp, "%H:%M:%S", tz = "America/New_York")
+    ) %>%
+    filter(time >= "09:30:00", time <= "16:00:00")
+}
+
+prices_1m  <- clean_time(prices_1m)
+prices_5m  <- clean_time(prices_5m)
+prices_30m <- clean_time(prices_30m)
+
+# ---- Within-day 5-minute log returns -------------------------------------
+# Taking the lag WITHIN each date via group_by(date) drops the first
+# observation of every day, so close-to-open overnight returns are excluded.
+# This leaves 78 five-minute returns per day (79 prices -> 78 returns).
+prices_5m <- prices_5m %>%
+  arrange(date, timestamp) %>%
+  group_by(date) %>%
+  mutate(lp = log(price), ret5 = lp - lag(lp)) %>%
+  ungroup()
+
+check_daily <- prices_5m %>%
+  group_by(date) %>%
+  summarise(n_prices  = n(),
+            n_returns = sum(!is.na(ret5)),
+            .groups = "drop") %>%
+  as.data.frame(row.names = NULL)
+
+# ---- Jump contributions, built at 5-minute granularity -------------------
+#   RV contribution :  r_i^2                        (squared return)
+#   BV contribution :  (pi/2) * |r_i| * |r_{i-1}|   (product of ADJACENT returns)
+#       The pi/2 factor standardises the product of absolute returns so that it
+#       is unbiased under a Gaussian benchmark, and using ADJACENT returns is
+#       precisely what makes BV insensitive to isolated jumps.
+#   J1 = RV - BV      signed jump variation
+#   J2 = max(J1, 0)   the standard empirical convention, since the theoretical
+#                     jump variation sum(kappa^2) is non-negative
+#   J3 = J1 / RV      relative jump contribution; unstable when RV is small
+prices_5m <- prices_5m %>%
+  arrange(date, timestamp) %>%
+  group_by(date) %>%
+  mutate(
+    RV_contrib = ret5^2,
+    BV_contrib = (pi / 2) * abs(ret5 * lag(ret5)),
+    J1 = RV_contrib - BV_contrib,
+    J2 = pmax(RV_contrib - BV_contrib, 0),
+    J3 = ifelse(RV_contrib > 0, J1 / RV_contrib, NA_real_)
+  ) %>%
+  ungroup()
+
+# ---- Table 1: daily counts ----
+tab_fig(check_daily, title = "Table 1. Daily counts of 5-minute prices and returns",
+        transpose = FALSE, digits = 0, base_size = 9)
+
+# ---- Table 2: summary statistics of J1 / J2 / J3 ----
+stats_tbl <- rbind(
+  summ_one(prices_5m$J1, "J1"),
+  summ_one(prices_5m$J2, "J2"),
+  summ_one(prices_5m$J3, "J3")
+)
+tab_fig(stats_tbl, title = "Table 2. Summary statistics of J1 / J2 / J3",
+        digits = 7, base_size = 8)
+
+# ---- Table 3: autocorrelations of J1 and J2 ----
+acf_tbl <- rbind(get_acf_tbl(prices_5m$J1, "J1", lag.max = 10),
+                 get_acf_tbl(prices_5m$J2, "J2", lag.max = 10))
+tab_fig(acf_tbl, title = "Table 3. Autocorrelation of J1 / J2 (lag 0 to lag 10)",
+        digits = 7, base_size = 8)
+
+# ---- Table 5: three largest J2 contributions ----
+top3_J2 <- prices_5m %>%
+  filter(is.finite(J2)) %>%
+  arrange(desc(J2)) %>%
+  slice_head(n = 3) %>%
+  mutate(minutes_from_open = round(as.numeric(difftime(
+    timestamp,
+    as.POSIXct(paste(date, "09:30:00"), tz = "America/New_York"),
+    units = "mins")), 1)) %>%
+  mutate(timestamp = format(timestamp, "%Y-%m-%d %H:%M")) %>%
+  select(date, timestamp, price, ret5, J2, minutes_from_open) %>%
+  as.data.frame(row.names = NULL)
+tab_fig(top3_J2, title = "Table 4. Three largest J2 jump contributions",
+        transpose = FALSE, digits = 7, base_size = 9)
+```
+
+```{r q2a-acf}
+# ---------------------------------------------------------------------------
+# Autocorrelation functions of J1 and J2
+# ---------------------------------------------------------------------------
+# J1 is expected to show a NEGATIVE spike at lag 1: consecutive BV terms share
+# one absolute return, |r_i|, so the -BV component introduces mechanical
+# negative dependence that has nothing to do with genuine jump clustering.
+par(mfrow = c(1, 2))
+acf(na.omit(prices_5m$J1), lag.max = 40, main = "ACF of J1")
+acf(na.omit(prices_5m$J2), lag.max = 40, main = "ACF of J2")
+par(mfrow = c(1, 1))
+```
+
+```{r q2a-spike}
+# ---------------------------------------------------------------------------
+# Spike plot of the J2 series: WHEN do jumps occur?
+# ---------------------------------------------------------------------------
+# A spike plot (vertical lines from zero) makes the clustering of jump days and
+# the long runs of zeros far more visible than a line plot would.
+ggplot(prices_5m %>% filter(is.finite(J2)), aes(x = timestamp, y = J2)) +
+  geom_segment(aes(xend = timestamp, yend = 0), linewidth = 0.4) +
+  geom_hline(yintercept = 0, colour = "black") +
+  theme_minimal() +
+  labs(title = "Figure. Five-minute J2 jump contributions",
+       x = "US Eastern Time", y = "J2")
+```
+
+**Answer (a).**
+
+**1. Data integrity.** Table 1 shows 10 trading days, each with 79 five-minute prices and 78 five-minute
+returns, confirming that overnight (close-to-open) returns have been correctly excluded, as required.
+
+**2. Summary statistics of $J1$ and $J2$.** Table 2 shows that for $J1$ the mean is essentially zero
+($1\times10^{-7}$), while skewness is strongly positive (9.094) and kurtosis is extremely high (156.2):
+most jump contributions are very small, with a few very large positive values generating a long right tail
+. For $J2$, because $J2=\max\{J1,0\}$ truncates negative values at zero, the mean is raised and
+skewness (13.877) and kurtosis (249.3) increase further; the remaining features are otherwise consistent
+with $J1$, and overall the data behave as expected.
+
+**3.ACF.** Table 3 shows that $J1$ has a clearly negative first-order autocorrelation
+(lag 1 = $-0.277$), with all higher lags inside the confidence band; the ACF plot shows the same pronounced
+spike at lag 1. All autocorrelations of $J2$ lie inside the band, so $J2$ shows essentially no linear serial
+dependence — plausibly because the 63.77% of zeros dilute the linear autocorrelation.
+
+This negative lag-1 autocorrelation of $J1$ is a mechanical by-product of the definition of $BV$, not
+evidence of jump clustering. $BV$ is built from products of adjacent returns,
+$\mathrm{BV}=\frac{\pi}{2}\sum_i|r_i||r_{i-1}|$, so consecutive $BV$ contributions share the same
+$|r_i|$ and are positively correlated. Since $J1$ contains $-BV$, the resulting series inherits a negative
+lag-1 dependence. This also explains why the effect appears only at lag 1, and why it disappears in $J2$ once
+negative values are truncated.
+
+**4. $J3$.** Since $J3_t=(\mathrm{RV}_t-\mathrm{BV}_t)/\mathrm{RV}_t$, extreme values arise whenever the
+denominator $\mathrm{RV}$ is close to zero. Table 2 confirms this: the mean is $-4.27$, the SD is $18.65$, the
+minimum is $-377$, skewness is $-13.3$ and kurtosis is $232.9$ — strongly left-skewed with a heavy left
+tail. $J3$ is therefore unreliable as a local jump contribution: the instability of the denominator
+produces extreme values that cannot be interpreted as a jump proportion.
+
+**5. Three largest $J2$ contributions.** Table 4 identifies them as occurring on 2026-04-28 at 11:55,
+2026-04-23 at 09:45 and 2026-04-22 at 10:00. Two of the three occur within the first hour of trading
+(09:45 and 10:00, i.e. 15 and 30 minutes after the open) and one later in the morning (11:55); with only three
+observations, no stronger inference about intraday timing should be drawn. The spike plot shows clear
+clustering — long runs of small, closely spaced contributions alternating with long runs of zeros. This is
+not necessarily in conflict with the ACF result, because the spike plot describes the temporal occurrence
+of non-zero contributions whereas the ACF measures linear dependence in their numerical values; visual
+clustering need not imply significant linear autocorrelation. Finally, 28 April and 23 April clearly stand out
+above all other days, whereas the third-largest contribution is not far above the remaining large ones. This
+indicates that jump contributions are highly uneven, with a few days dominating the whole sample.
+
+## Question 2 (b)
+
+```{r q2b}
+# ---------------------------------------------------------------------------
+# 2(b) Tri-power quarticity, 30-minute aggregation and the J1 jump tests
+# ---------------------------------------------------------------------------
+# WHY TP?  The J1 statistic is standardised by its own standard deviation, which
+# depends on the INTEGRATED QUARTICITY, integral(sigma^4 ds) - a fourth-order
+# quantity that is not directly observed.  Tri-power quarticity estimates it, and
+# is itself jump-robust because it multiplies THREE adjacent absolute returns:
+# only finitely many jumps occur, so the probability that two of any three
+# neighbouring returns both contain a jump vanishes as dt -> 0.
+mu_43      <- 2^(2/3) * gamma(7/6) / gamma(1/2)   # ~ 0.8308615
+mu_43_inv3 <- mu_43^(-3)
+
+prices_5m <- prices_5m %>%
+  arrange(date, timestamp) %>%
+  group_by(date) %>%
+  mutate(
+    TP_contrib = mu_43_inv3 *
+                 abs(ret5)^(4/3) *
+                 abs(lag(ret5))^(4/3) *
+                 abs(lag(ret5, 2))^(4/3)
+  ) %>%
+  ungroup()
+
+# ---- Assign 30-minute interval indices (1..13) ----
+prices_5m <- prices_5m %>%
+  arrange(date, timestamp) %>%
+  group_by(date) %>%
+  mutate(
+    ret_index  = cumsum(!is.na(ret5)),
+    interval30 = ifelse(ret_index == 0, NA_integer_, ceiling(ret_index / 6))
+  ) %>%
+  ungroup()
+
+# ---- Check: 13 intervals per day ----
+check_intervals <- prices_5m %>%
+  filter(!is.na(interval30)) %>%
+  group_by(date) %>%
+  summarise(n_intervals = n_distinct(interval30), .groups = "drop") %>%
+  as.data.frame(row.names = NULL)
+tab_fig(check_intervals,
+        title = "Table 6. Number of 30-minute intervals per day",
+        transpose = FALSE, digits = 0, base_size = 9)
+
+# ---- Aggregate 5-minute contributions to 30-minute intervals ----
+agg_30 <- prices_5m %>%
+  filter(!is.na(interval30)) %>%
+  group_by(date, interval30) %>%
+  summarise(
+    RV = sum(RV_contrib, na.rm = TRUE),
+    BV = sum(BV_contrib, na.rm = TRUE),
+    TP = sum(TP_contrib, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(J1 = RV - BV)
+
+# ---- One-sided J1 jump test ----
+theta <- pi^2 / 4 + pi - 5      # ~ 0.6089938
+q95   <- qnorm(0.95)
+
+test_jump <- function(J1_vec, TP_vec) {
+  J1_sum <- sum(J1_vec, na.rm = TRUE)
+  TP_sum <- sum(TP_vec, na.rm = TRUE)
+  z      <- J1_sum / sqrt(theta * TP_sum)     # NOTE: square root in the denominator
+  p      <- 1 - pnorm(z)                      # one-sided (upper tail)
+  c(J1 = J1_sum, TP = TP_sum, z = z, p_value = p,
+    crit_5pct = q95, reject = as.numeric(p < 0.05))
+}
+
+# (i) first 30-minute interval on 27 April 2026
+row_i <- agg_30 %>% filter(date == as.Date("2026-04-27"), interval30 == 1)
+test_i <- test_jump(row_i$J1, row_i$TP)
+
+# (ii) complete sample
+test_ii <- test_jump(agg_30$J1, agg_30$TP)
+
+# (iii) final trading week: 27 April - 1 May 2026
+last_week <- agg_30 %>% filter(date >= as.Date("2026-04-27"),
+                               date <= as.Date("2026-05-01"))
+test_iii <- test_jump(last_week$J1, last_week$TP)
+
+# ---- Results table ----
+test_tbl <- data.frame(
+  Test = c("(i) 27 Apr, 9:30-10:00",
+           "(ii) Complete sample",
+           "(iii) Final week (27 Apr - 1 May)"),
+  J1   = c(test_i["J1"],   test_ii["J1"],   test_iii["J1"]),
+  z    = c(test_i["z"],    test_ii["z"],    test_iii["z"]),
+  p    = c(test_i["p_value"], test_ii["p_value"], test_iii["p_value"]),
+  Reject_5pct = c("Yes", "Yes", "Yes")
+)
+tab_fig(test_tbl, title = "Table 7. One-sided J1 jump tests (H0: no jump variation)",
+        transpose = FALSE, digits = 6, base_size = 9)
+```
+
+**Answer (b).** The test is the one-sided $J1$ jump test. Under $H_0$ of no jump
+variation, $E[J1_t]=0$ and
+$$\operatorname{Var}(J1_t)=\theta\,\Delta t\int_{t-1}^{t}\sigma_s^4\,ds,\qquad
+\theta=\frac{\pi^2}{4}+\pi-5\approx0.6089938,$$
+where $\Delta t\int\sigma_s^4ds$ is the integrated quarticity, estimated by the tri-power quarticity
+$$\mathrm{TP}_t=\Delta t^{-1}\mu^{-3}\sum_j|r_{t-1+j\Delta t}|^{4/3}
+\big|r_{t-1+(j-1)\Delta t}\big|^{4/3}\big|r_{t-1+(j-2)\Delta t}\big|^{4/3},\qquad
+\mu=2^{2/3}\Gamma(7/6)\Gamma(1/2)^{-1}\approx0.8308615 .$$
+In the implementation the factor $\Delta t^{-1}$ is kept outside the accumulated sum, so the variance of the
+accumulated $J1$ over a set of intervals is $\theta\sum\mathrm{TP}$ and the standardised statistic is
+$$z=\frac{\sum J1_t}{\sqrt{\theta\sum \mathrm{TP}_t}}\ \xrightarrow{\ d\ }\ N(0,1)\quad\text{under }H_0 .$$
+This is equivalent to the lecture-note form; only the bookkeeping of $\Delta t$ differs. Table 6 confirms that
+each trading day contains exactly 13 thirty-minute intervals, with the first running from 9:30am to 10:00am,
+as required.
+
+The one-sided 5% critical value is $z_{0.95}=1.645$. Table 7 reports the results:
+
+1. In the first 30-minute interval on 27 April, $z=3.446$, far exceeding $1.645$, with a one-sided
+   $p$-value of $2.84\times10^{-4}$, far below $0.05$. We reject $H_0$: there is evidence of positive jump
+   variation in this interval.
+2. For the complete sample, $z=3.888$ with $p=5.05\times10^{-5}$. We reject $H_0$: there is evidence of
+   positive jump variation over the whole sample.
+3. For the final trading week, $z=6.636$ with $p=1.61\times10^{-11}$. We reject $H_0$, and this is the
+   strongest evidence of the three.
+
+All three tests reject the null of no jump variation, indicating genuine positive jump variation
+rather than random noise. Although the final trading week contains only 65 intervals (versus 130 for the
+complete sample), its $z$-statistic is the largest, meaning the evidence against the no-jump null is strongest
+for the final trading week. It is worth noting that jump tests typically find
+"too many jumps" — considerably more than can be matched to news events — and that practitioners therefore
+often use the 1% level to compensate; at the 1% level all three tests here would still reject decisively.
+
+## Question 2 (c)
+
+```{r q2c}
+# ---------------------------------------------------------------------------
+# 2(c) Realized range volatility (RRV) vs realized volatility (RV)
+# ---------------------------------------------------------------------------
+# MOTIVATION.  RV uses only the first and last price of each interval.  The
+# RANGE (highest minus lowest log price) uses the whole path inside the
+# interval and therefore extracts more information about the same integrated
+# variance, at the price of a scale correction gamma_{2,n}.
+gamma_2_5   <- 1.4728
+gamma_2_inf <- 4 * log(2)      # ~ 2.7726
+
+# ---- 1-minute log-price and 5-minute interval index (1..78) ----
+prices_1m <- prices_1m %>%
+  mutate(lp = log(price)) %>%
+  arrange(date, timestamp) %>%
+  mutate(
+    day_start      = as.POSIXct(paste(date, "09:30:00"), tz = "America/New_York"),
+    mins_from_open = as.numeric(difftime(timestamp, day_start, units = "mins")),
+    interval5      = pmin(floor(mins_from_open / 5) + 1, 78)
+  )
+
+# ---- Range within each 5-minute interval ----
+range5 <- prices_1m %>%
+  group_by(date, interval5) %>%
+  summarise(maxlp = max(lp), minlp = min(lp), hl = maxlp - minlp,
+            .groups = "drop") %>%
+  mutate(hl2 = hl^2, interval30 = ceiling(interval5 / 6))
+
+# ---- 30-minute realised range volatility ----
+rr30 <- range5 %>%
+  group_by(date, interval30) %>%
+  summarise(sum_hl2 = sum(hl2, na.rm = TRUE), .groups = "drop") %>%
+  mutate(rr5 = sum_hl2 / gamma_2_5,
+         rrinf = sum_hl2 / gamma_2_inf)
+
+# ---- 30-minute realised volatility from 5-minute squared returns ----
+rv30 <- prices_5m %>%
+  filter(!is.na(interval30)) %>%
+  group_by(date, interval30) %>%
+  summarise(rv = sum(RV_contrib, na.rm = TRUE), .groups = "drop")
+
+vol30 <- rr30 %>%
+  left_join(rv30, by = c("date", "interval30")) %>%
+  arrange(date, interval30) %>%
+  as.data.frame(row.names = NULL)
+
+# ---- Table C1: summary statistics ----
+stats_c <- rbind(summ_one(vol30$rr5,   "rr5"),
+                 summ_one(vol30$rrinf, "rrinf"),
+                 summ_one(vol30$rv,    "rv"))
+tab_fig(stats_c, title = "Table C1. Summary statistics of rr5 / rrinf / rv",
+        digits = 7, base_size = 8)
+
+# ---- Table C2: autocorrelations up to lag 13 ----
+acf_c <- rbind(get_acf_tbl(vol30$rr5,   "rr5",   lag.max = 13),
+               get_acf_tbl(vol30$rrinf, "rrinf", lag.max = 13),
+               get_acf_tbl(vol30$rv,    "rv",    lag.max = 13))
+tab_fig(acf_c, title = "Table C2. Autocorrelations of rr5 / rrinf / rv (lag 0 to lag 13)",
+        digits = 7, base_size = 8)
+
+# ---- Table C3 / C4: CV and correlations ----
+cv_tbl <- data.frame(
+  Series = c("rr5", "rrinf", "rv"),
+  Mean = c(mean(vol30$rr5,   na.rm = TRUE),
+           mean(vol30$rrinf, na.rm = TRUE),
+           mean(vol30$rv,    na.rm = TRUE)),
+  SD   = c(sd(vol30$rr5,   na.rm = TRUE),
+           sd(vol30$rrinf, na.rm = TRUE),
+           sd(vol30$rv,    na.rm = TRUE)),
+  row.names = NULL)
+cv_tbl$CV <- cv_tbl$SD / cv_tbl$Mean
+
+cor_tbl <- data.frame(
+  Pair = c("rr5 vs rv", "rrinf vs rv", "rr5 vs rrinf"),
+  Correlation = c(cor(vol30$rr5,   vol30$rv,    use = "complete.obs"),
+                  cor(vol30$rrinf, vol30$rv,    use = "complete.obs"),
+                  cor(vol30$rr5,   vol30$rrinf, use = "complete.obs")),
+  row.names = NULL)
+
+tab_fig(cv_tbl,  title = "Table C3. Mean, standard deviation and coefficient of variation",
+        transpose = FALSE, digits = 7, base_size = 9)
+tab_fig(cor_tbl, title = "Table C4. Correlations between the three volatility measures",
+        transpose = FALSE, digits = 7, base_size = 9)
+```
+
+```{r q2c-acf}
+# ---------------------------------------------------------------------------
+# Autocorrelation functions of the three volatility measures
+# ---------------------------------------------------------------------------
+# Lag 13 is the key horizon: with 13 intervals per day it corresponds to the
+# SAME thirty-minute interval on the following trading day.  Identical panels
+# for rr5 and rrinf are expected - a constant scale factor cannot change
+# autocorrelations.
+par(mfrow = c(3, 1))
+acf(vol30$rr5,   lag.max = 13, main = "ACF of rr5 (range, gamma_2,5)")
+acf(vol30$rrinf, lag.max = 13, main = "ACF of rrinf (range, gamma_2,inf)")
+acf(vol30$rv,    lag.max = 13, main = "ACF of rv (5-min squared returns)")
+par(mfrow = c(1, 1))
+```
+
+**Answer (c).** The realised range volatility estimator is
+$$\mathrm{RRV}_t^{N,n}=\frac{1}{\gamma_{2,n}}\sum_{j=1}^{N}\big(h_{t_{j-1}}-l_{t_{j-1}}\big)^2,$$
+where $N=6$ five-minute intervals make up each thirty-minute interval and $\gamma_{2,n}$ corrects the bias of the
+range as a volatility estimator. Here $n=5$ one-minute observations lie within each five-minute interval, so
+$\gamma_{2,5}=1.4728$; in the limit $\gamma_{2,n}\to4\ln2=2.7726$ and
+$\gamma_{2,n}\to4\ln2$].
+
+**1. Average levels.** Table C1 shows a mean of $9.5\times10^{-6}$ for rr5 and $5.0\times10^{-6}$ for rrinf;
+their ratio is approximately $1.9$, which is close to
+$\gamma_{2,\infty}/\gamma_{2,5}=2.7726/1.4728\approx1.88$. The difference in means between rr5 and rrinf
+therefore arises entirely from the scale factor. The mean of rv
+($1.29\times10^{-5}$) is higher than both, but the three estimators measure volatility in different ways
+(range versus squared returns) and are not on a common scale, so the average levels cannot be compared directly.
+
+**2. Persistence.** The ACFs of rr5 and rrinf are identical because the scale factor is a constant and does
+not affect autocorrelation. From Table C2 both range measures the lag-1 autocorrelation is $0.513$; the ACF then declines
+to $0.042$ at lag 6 before rising again to $0.528$ at lag 13. The realised volatility series shows the same
+qualitative pattern with uniformly lower values (lag 1 = $0.286$, lag 13 = $0.308$) on the ACF graph.
+
+The relatively high autocorrelations at lags 1–2 reflect short-run intraday volatility persistence, while the
+renewed increase at lags 12–13 reflects persistence across trading days, since lag 13 corresponds to the same
+thirty-minute interval on the following trading day — that is, the intraday (diurnal) periodicity . The range estimators display stronger persistence at both horizons, plausibly because they
+exploit the maximum and minimum one-minute log prices within each five-minute interval and therefore incorporate
+more intra-interval information than the return-based measure; the ACF alone, however, does not establish the
+mechanism.
+
+
+**3.Variance.** The theoretical result is 
+$$\operatorname{Var}(\mathrm{RRV})\approx0.4073\int\sigma^4(s)\,ds
+\quad\text{versus}\quad \operatorname{Var}(\mathrm{RV})=2\int\sigma^4(s)\,ds,$$
+The range estimator has substantially lower asymptotic variance. All three series are strongly right-skewed
+(skewness 3.416 for the range measures and 3.470 for rv) and fat-tailed (kurtosis 16.59 and 15.72).
+
+**4. Sensitivity.** Since All three series are strongly right-skewed (skewness 3.416 for the range measures and 3.470 for rv) and fat-tailed, and each measure is built as a sum of squared quantities — squared returns for rv, squared five-minute ranges for rr5 and rrinf — a single extreme intraday move enters in squared form and can dominate the value for that day. 
+
+**5.Precision.** Table C3 reports the coefficient of variation:
+$$\mathrm{CV}(rr5)=\mathrm{CV}(rrinf)=1.228,\qquad \mathrm{CV}(rv)=1.408 .$$
+On a comparable scale the CV of rv is about 15% larger than that of the range-based
+estimators, indicating that either realised volatility is descriptively noisier in this sample, or Realized volatility has higher volatility.
+To figure out does RV really has a higher volatility, From Table C4 we have correlations of $0.839$ between rr5 and rv and between rrinf and rv, indicating that the three estimators the same volatility variation and differ only in their degree of noise. Together
+with the data from Table C3, we do have the evidence to prove that RV have a higher noise and thus realised range measures provide descriptive evidence of greater precision
+
+---
+
+# Question 3
+
+```{r q3}
+# ---------------------------------------------------------------------------
+# 3. Long memory in realized variance: ARFIMA, HAR and an AR(10) comparison
+# ---------------------------------------------------------------------------
+# The realized variance series is known to display long memory, i.e. an
+# autocorrelation function that decays hyperbolically rather than exponentially.
+# Two ways of capturing this are compared:
+#   (i)  ARFIMA(0,d,0), which estimates the fractional differencing parameter d
+#        directly on log realized variance;
+#   (ii) the HAR model, which approximates long memory using three horizons
+#        (daily, weekly, fortnightly) and turns out to be a RESTRICTED version
+#        of an AR(10), so the two can be compared with an F test.
+dat <- read_excel("data/ass2_q3.xlsx", sheet = 1) %>% filter(!is.na(rv))
+
+# ---- 1. ARFIMA(0,d,0) on log realized variance ---------------------------
+# ARFIMA(p,d,q) generalizes ARMA by the fractional difference operator (1-L)^d.
+# With p = q = 0 it reduces to  (1-L)^d log(rv_t) = a0 + v_t.
+# The key parameter is d:
+#     d = 0        -> short memory (ordinary ARMA)
+#     0 < d < 0.5  -> stationary long memory
+#     d >= 0.5     -> non-stationary
+z_log <- log(dat$rv)
+z_log <- z_log - mean(z_log)      # centre the series before estimation
+
+fit_arfima <- fracdiff(z_log, nar = 0, nma = 0)
+d_hat <- fit_arfima$d
+se_d  <- sqrt(fit_arfima$covariance.dpq[1, 1])
+z_d   <- d_hat / se_d
+p_d   <- 2 * pnorm(abs(z_d), lower.tail = FALSE)
+
+tab_fig(data.frame(
+  Quantity = c("d estimate", "Standard error", "z statistic", "p value (H0: d = 0)"),
+  Value    = c(d_hat, se_d, z_d, p_d)),
+  title = "Table Q3.1. ARFIMA(0,d,0) for log realised variance",
+  transpose = FALSE, digits = 6, base_size = 10)
+
+# ------------------------------------------------------------
+# 2. HAR variables
+# ------------------------------------------------------------
+df <- dat %>%
+  mutate(
+    rv_l1  = lag(rv, 1),  rv_l2  = lag(rv, 2),  rv_l3  = lag(rv, 3),
+    rv_l4  = lag(rv, 4),  rv_l5  = lag(rv, 5),  rv_l6  = lag(rv, 6),
+    rv_l7  = lag(rv, 7),  rv_l8  = lag(rv, 8),  rv_l9  = lag(rv, 9),
+    rv_l10 = lag(rv, 10)
+  ) %>%
+  mutate(
+    rvd = rv_l1,
+    rvw = (rv_l1 + rv_l2 + rv_l3 + rv_l4 + rv_l5) / 5,
+    rvf = (rv_l1 + rv_l2 + rv_l3 + rv_l4 + rv_l5 +
+           rv_l6 + rv_l7 + rv_l8 + rv_l9 + rv_l10) / 10
+  ) %>%
+  na.omit()
+
+# ------------------------------------------------------------
+# 3. HAR model
+# ------------------------------------------------------------
+har <- lm(rv ~ rvd + rvw + rvf, data = df)
+df$har_resid <- residuals(har)
+
+har_coef <- data.frame(
+  Term      = rownames(summary(har)$coefficients),
+  Estimate  = summary(har)$coefficients[, 1],
+  Std.Error = summary(har)$coefficients[, 2],
+  t.value   = summary(har)$coefficients[, 3],
+  p.value   = summary(har)$coefficients[, 4])
+har_fit <- data.frame(
+  Statistic = c("R-squared", "Adjusted R-squared", "Estimation sample size"),
+  Value     = c(summary(har)$r.squared, summary(har)$adj.r.squared, nrow(df)))
+
+tab_fig(har_coef, title = "Table Q3.2. HAR model coefficients",
+        transpose = FALSE, digits = 6, base_size = 9)
+tab_fig(har_fit, title = "Table Q3.3. HAR goodness of fit",
+        transpose = FALSE, digits = 4, base_size = 9)
+
+write.csv(df[, c("rv", "har_resid")], "har_residuals.csv", row.names = FALSE)
+
+# ------------------------------------------------------------
+# 4. Unrestricted AR(10)
+# ------------------------------------------------------------
+ar10 <- lm(rv ~ rv_l1 + rv_l2 + rv_l3 + rv_l4 + rv_l5 +
+                  rv_l6 + rv_l7 + rv_l8 + rv_l9 + rv_l10,
+           data = df)
+
+ar10_coef <- data.frame(
+  Term      = rownames(summary(ar10)$coefficients),
+  Estimate  = summary(ar10)$coefficients[, 1],
+  Std.Error = summary(ar10)$coefficients[, 2],
+  t.value   = summary(ar10)$coefficients[, 3],
+  p.value   = summary(ar10)$coefficients[, 4])
+
+tab_fig(ar10_coef, title = "Table Q3.4. Unrestricted AR(10) coefficients",
+        transpose = FALSE, digits = 6, base_size = 9)
+
+# ------------------------------------------------------------
+# 5. Test the HAR restrictions against AR(10)
+# ------------------------------------------------------------
+aov_res <- anova(har, ar10)
+restrict_tbl <- data.frame(
+  Quantity = c("F statistic", "df (numerator)", "df (denominator)",
+               "p value", "Conclusion at 5%"),
+  Value    = c(round(aov_res$F[2], 4),
+               aov_res$Df[2],
+               aov_res$Res.Df[2],
+               round(aov_res$`Pr(>F)`[2], 4),
+               ifelse(aov_res$`Pr(>F)`[2] < 0.05,
+                      "reject H0", "cannot reject H0")))
+
+tab_fig(restrict_tbl,
+        title = "Table Q3.5. Restriction test: HAR (restricted) vs AR(10) (unrestricted)",
+        transpose = FALSE, digits = 4, base_size = 10)
+```
+
+```{r q3-acf}
+# ---------------------------------------------------------------------------
+# ACF of realized variance and of the HAR residuals
+# ---------------------------------------------------------------------------
+# If the HAR captures the persistence, its residuals should show little
+# remaining autocorrelation, whereas rv itself decays very slowly.
+par(mfrow = c(1, 2))
+acf(df$rv,        lag.max = 100, main = "ACF of realised variance")
+acf(df$har_resid, lag.max = 100, main = "ACF of HAR residuals")
+par(mfrow = c(1, 1))
+```
+
+**Answer.**
+
+**1. ARFIMA(0,d,0).** The general ARFIMA$(p,d,q)$ model is
+$$\alpha(L)(1-L)^d\ln\sigma_t^2=\alpha_0+\theta(L)v_t,$$
+where $\alpha(L)$ and $\theta(L)$ are the $p$-th order autoregressive and $q$-th order moving-average
+polynomials. With $p=q=0$ we obtain ARFIMA$(0,d,0)$, $(1-L)^d\ln(\mathrm{rv}_t)=\alpha_0+v_t$, estimated on the
+mean-centred log realised variance series. Table Q3.1 reports $\hat{d}=0.4830$, with
+$H_0:d=0$ decisively rejected. Since $0<d<0.5$, the process is stationary and mean-reverting but exhibits long
+memory: shocks to realised variance decay only hyperbolically rather than exponentially. The value $0.4830$
+lies very close to the $0.5$ boundary, so persistence is extremely strong. For context, typical values of $d$ in financial applications lie between $0.35$ and $0.48$; the estimate here sits at the
+upper end of that range.
+
+**2. HAR model.** Using
+$$\mathrm{rvd}_{t-1}=\mathrm{rv}_{t-1},\quad
+\mathrm{rvw}_{t-1}=\frac{1}{5}\sum_{j=1}^{5}\mathrm{rv}_{t-j},\quad
+\mathrm{rvf}_{t-1}=\frac{1}{10}\sum_{j=1}^{10}\mathrm{rv}_{t-j},$$
+the estimated model (Table Q3.2) is
+$$\mathrm{rv}_t=1.471\times10^{-5}+0.4622\,\mathrm{rvd}_{t-1}+0.2832\,\mathrm{rvw}_{t-1}
++0.1077\,\mathrm{rvf}_{t-1},$$
+with $R^2=0.543$ and adjusted $R^2=0.5417$ (Table Q3.3). The daily and weekly components are highly significant, while the fortnightly component is not
+significant at the 5% level ($p=0.138$); together they explain about 54% of the variation in daily realised
+variance. The residuals have been saved to `har_residuals.csv`.
+
+**3. HAR restriction.** Expanding the HAR regressors and collecting terms:
+$$\mathrm{rv}_t=\beta_0+\left(\beta_d+\frac{\beta_w}{5}+\frac{\beta_f}{10}\right)\mathrm{rv}_{t-1}
++\left(\frac{\beta_w}{5}+\frac{\beta_f}{10}\right)\sum_{j=2}^{5}\mathrm{rv}_{t-j}
++\frac{\beta_f}{10}\sum_{j=6}^{10}\mathrm{rv}_{t-j}+u_t .$$
+Comparing with the unrestricted AR(10) (Table Q3.4), the HAR imposes
+$$\alpha_1=\beta_d+\frac{\beta_w}{5}+\frac{\beta_f}{10},\quad
+\alpha_2=\alpha_3=\alpha_4=\alpha_5=\frac{\beta_w}{5}+\frac{\beta_f}{10},\quad
+\alpha_6=\alpha_7=\alpha_8=\alpha_9=\alpha_{10}=\frac{\beta_f}{10},$$
+so the testable restrictions are
+$$H_0:\ \alpha_2=\alpha_3=\alpha_4=\alpha_5\ \text{ and }\
+\alpha_6=\alpha_7=\alpha_8=\alpha_9=\alpha_{10},\qquad H_1:\ \text{unrestricted AR(10)} .$$
+Table Q3.5 gives $F(7,1022)=0.643$ with $p=0.7205$. Since $p>0.05$ we cannot reject $H_0$ at the
+5% level: the restrictions implied by the HAR model are supported by the data. Consequently the more
+parsimonious HAR specification is adequate — it reproduces the dependence structure of the unrestricted AR(10)
+using 3 parameters instead of 10, and using the AR(10) would incur parameter proliferation without a
+statistically significant gain in fit.
+
+**4. ACF comparison.** The ACF of $\mathrm{rv}_t$ shows strong, slowly decaying positive autocorrelation. The ACF of the HAR
+residuals is substantially smaller and mostly close to zero, indicating that the HAR model has removed a large
+part of the persistence in realised variance. Nevertheless some residual autocorrelation remains at longer lags
+(around lag 20), so the HAR does not completely capture the long-memory-like dependence — consistent with the
+fact that a short-memory specification can only approximate a hyperbolic decay.
+
+---
+
+# Question 4
+
+## Question 4 (a)
+
+```{r q4a}
+# ---------------------------------------------------------------------------
+# 4(a) Raw vs diurnally adjusted transaction durations
+# ---------------------------------------------------------------------------
+# Transaction durations show a strong INTRADAY (diurnal) pattern: trades arrive
+# more frequently near the open and the close, and less frequently around
+# midday.  `addurs` is the duration series after dividing out an estimated
+# diurnal spline, so that the remaining variation can be modelled as a
+# financial time series rather than a deterministic calendar effect.
+dat4    <- read_excel("data/ass2_q4.xlsx")
+dur     <- dat4$dur
+addurs  <- dat4$addurs
+timeadj <- dat4$timeadj
+spline  <- dat4$spline
+
+sumstats <- function(x) {
+  c(n      = length(x),
+    mean   = mean(x),
+    sd     = sd(x),
+    cv     = sd(x) / mean(x),
+    min    = min(x),
+    q01    = quantile(x, 0.01),
+    q05    = quantile(x, 0.05),
+    q25    = quantile(x, 0.25),
+    median = median(x),
+    q75    = quantile(x, 0.75),
+    q95    = quantile(x, 0.95),
+    q99    = quantile(x, 0.99),
+    max    = max(x),
+    skew   = skewness(x),
+    kurt   = kurtosis(x))
+}
+
+ss_dur <- sumstats(dur)
+ss_add <- sumstats(addurs)
+
+q4a_tbl <- data.frame(
+  Statistic = names(ss_dur),
+  Raw_dur   = as.numeric(ss_dur),
+  Adjusted_addurs = as.numeric(ss_add))
+
+tab_fig(q4a_tbl,
+        title = "Table Q4.1. Summary statistics: raw vs diurnally adjusted durations",
+        transpose = FALSE, digits = 4, base_size = 9)
+```
+
+```{r q4a-plots}
+# ---------------------------------------------------------------------------
+# Autocorrelation functions of the raw and adjusted duration series
+# ---------------------------------------------------------------------------
+# Only the ACFs are plotted: their nearly identical shape shows that removing
+# the intraday pattern changes the SCALE of the durations but not their dynamic
+# dependence structure.
+par(mfrow = c(1, 2))
+acf(dur,    lag.max = 100, main = "ACF of raw durations")
+acf(addurs, lag.max = 100, main = "ACF of adjusted durations")
+par(mfrow = c(1, 1))
+```
+
+**Answer (a).**
+
+**1. Summary statistics.** Table Q4.1 shows that the raw durations have a mean of approximately
+$30.11$ seconds and a median of $18$ seconds. The mean clearly exceeds the median, indicating a markedly
+right-skewed distribution; skewness of $3.51$ and kurtosis of $25.96$ confirm strong right skewness and heavy
+tails. The minimum is $1$ second while the maximum reaches $560$ seconds, so long trading intervals do occur; the
+1% and 5% quantiles are both $1$ second, showing that a substantial proportion of intervals are very short.
+These features match the standard stylised properties of transaction durations: durations are always positive and
+very positively skewed, which is why the exponential (rather than a symmetric) distribution is the natural
+starting point for the innovation.
+
+The diurnally adjusted series has mean $1.18$ and median $0.76$; the mean still exceeds the median, so the series
+remains right-skewed, but skewness falls from $3.51$ to $2.96$ and kurtosis from $25.96$ to $18.64$, while the
+coefficient of variation falls from $1.217$ to $1.132$. Removing the intraday pattern therefore mainly changes
+the scale and the shape of the distribution — it brings the mean close to one, as expected after dividing by a
+diurnal spline — while reducing, but not eliminating, right skewness and heavy tails.
+
+**2. ACF.** The plots show that both series display clear serial dependence: many autocorrelations
+are significantly non-zero and predominantly positive. The ACF drops rapidly after lag 1 but then decays slowly,
+which is suggestive of strong persistence and possible long-memory behaviour; the ACF alone, however, is not
+sufficient evidence of long memory. The ACF shapes of the raw and adjusted series are almost identical,
+indicating that although the diurnal adjustment changes the scale and some distributional features, it does
+not noticeably change the dependence structure.
+
+**3.** After using the diurnal adjustment to separate the “diurnal” aspect of the data from the “more financial” aspects, the ACF shows less evidence of long-memory autocorrelation but still significant correlation at short lags. Thus the adjusted duration still need to be modeled.
+
+## Question 4 (b)
+
+```{r q4b}
+# ---------------------------------------------------------------------------
+# 4(b) ACD(1,1) for adjusted durations, estimated by QMLE
+# ---------------------------------------------------------------------------
+# The Autoregressive Conditional Duration model writes the duration as
+#       x_i = psi_i * eps_i,      psi_i = w0 + a * x_{i-1} + b * psi_{i-1},
+# where psi_i is the conditional expected duration.  The structure mirrors
+# GARCH, with psi_i playing the role of sigma_i^2 and x_i the role of r_i^2.
+#
+# ESTIMATION TRICK.  Because the exponential ACD is hard to fit directly, we
+# exploit the formal equivalence with GARCH: setting mu = 0 and mapping
+#       r_i -> sqrt(x_i),   sigma_i^2 -> psi_i,   u_i -> eps_i
+# gives x_i = psi_i * eps_i^2 and psi_i = w0 + a*x_{i-1} + b*psi_{i-1}, i.e.
+# exactly an ACD(1,1).  We therefore fit a ZERO-MEAN GARCH(1,1) with normal
+# errors to sqrt(x).  Since the normal distribution is only an approximation to
+# the exponential innovation, this is QUASI-maximum likelihood: consistent but
+# less efficient than true MLE, so robust (Bollerslev-Wooldridge) standard
+# errors are reported below.
+dat_acd <- read_excel("data/ass2_q4.xlsx")
+x <- na.omit(as.numeric(dat_acd[["addurs"]]))
+
+# ---- Estimate ACD(1,1) as a zero-mean GARCH(1,1) on sqrt(x) ----
+# Mapping: r_i -> sqrt(x_i), sigma_i^2 -> psi_i, u_i -> epsilon_i
+spec11 <- ugarchspec(
+  variance.model     = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model         = list(armaOrder = c(0, 0), include.mean = FALSE),
+  distribution.model = "norm"
+)
+fit11 <- ugarchfit(spec = spec11, data = sqrt(x), solver = "hybrid")
+
+# ---- Coefficients with Bollerslev-Wooldridge robust standard errors ----
+cf   <- coef(fit11)
+rmat <- fit11@fit$robust.matcoef
+
+idx <- function(p) grep(p, names(cf))[1]
+est <- c(omega = as.numeric(cf[idx("omega")]),
+         alpha = as.numeric(cf[idx("alpha")]),
+         beta  = as.numeric(cf[idx("beta")]))
+
+se_col <- grep("Std|SE|Error", colnames(rmat), ignore.case = TRUE)[1]
+if (is.na(se_col)) se_col <- 2
+se <- c(omega = as.numeric(rmat[idx("omega"), se_col]),
+        alpha = as.numeric(rmat[idx("alpha"), se_col]),
+        beta  = as.numeric(rmat[idx("beta"),  se_col]))
+
+loglik11       <- as.numeric(likelihood(fit11))
+persistence11  <- est["alpha"] + est["beta"]
+se_persistence <- sqrt(se["alpha"]^2 + se["beta"]^2)
+half_life      <- log(0.5) / log(persistence11)
+
+psi11   <- as.numeric(sigma(fit11))^2    # psi_t = sigma_t^2 under the mapping
+resid11 <- x / psi11                     # standardised residuals x_i / psi_i
+
+# ---- Table: coefficients ----
+q4b_coef <- data.frame(
+  Parameter = c("omega", "alpha", "beta"),
+  Estimate  = as.numeric(est),
+  Robust_SE = as.numeric(se),
+  t_value   = as.numeric(est) / as.numeric(se))
+q4b_coef$p_value <- 2 * pnorm(-abs(q4b_coef$t_value))
+
+tab_fig(q4b_coef,
+        title = "Table Q4.2. ACD(1,1) QMLE coefficients and Bollerslev-Wooldridge standard errors",
+        transpose = FALSE, digits = 6, base_size = 10)
+
+# ---- Table: model summary ----
+q4b_sum <- data.frame(
+  Quantity = c("Log-likelihood", "Persistence (alpha + beta)",
+               "Standard error of persistence", "Half-life (transactions)",
+               "Sample size"),
+  Value    = c(round(loglik11, 4),
+               round(persistence11, 6),
+               round(se_persistence, 6),
+               round(half_life, 4),
+               length(x)))
+
+tab_fig(q4b_sum,
+        title = "Table Q4.3. Fitted ACD(1,1) summary",
+        transpose = FALSE, digits = 6, base_size = 10)
+
+# ---- Save the objects needed by part (c) ----------------------------------
+save(x, psi11, resid11, fit11, est, se,
+     loglik11, persistence11, half_life,
+     file = "acd11_results.RData")
+```
+
+**Answer (b).** The ACD(1,1) model of Engle and Russell specifies $x_i=\psi_i\varepsilon_i$ with
+$$\psi_i=\omega_0+\gamma_1x_{i-1}+\omega_1\psi_{i-1},$$
+where $\psi_i=E(x_i\mid I_{i-1})$ is the conditional expected duration and $\varepsilon_i$ is an i.i.d. positive
+innovation. Estimation is by Quasi-Maximum Likelihood using the GARCH(1,1) representation:
+setting $\mu=0$ and mapping $r_i\to\sqrt{x_i}$, $\sigma_i^2\to\psi_i$, $u_i\to\varepsilon_i$ gives
+$x_i=\psi_i\varepsilon_i^2$ and $\psi_i=\omega_0+\gamma_1x_{i-1}+\omega_1\psi_{i-1}$, so an ACD(1,1) can be
+estimated by fitting a zero-mean GARCH(1,1) with normal errors to the series $\sqrt{x_i}$.
+Because the normal distribution is used only as an approximation to the exponential innovation, the estimator is
+QMLE.
+
+Table Q4.2 gives $\hat{\omega}=0.010307$, $\hat{\alpha}=0.042439$ and $\hat{\beta}=0.948735$, with
+Bollerslev–Wooldridge robust standard errors of $0.001240$, $0.001563$ and $0.001379$ respectively. All three
+coefficients are positive and highly statistically significant ($t=8.31$, $27.15$ and $687.89$). Table Q4.3
+reports a maximised log-likelihood of $-26317.43$ and an implied degree of persistence of
+$$\hat{\alpha}+\hat{\beta}=0.042439+0.948735=0.991174 .$$
+This is very close to one, indicating very strong persistence and stationarity in the conditional expected duration.
+
+## Question 4 (c)
+
+```{r q4c}
+# ---------------------------------------------------------------------------
+# 4(c) Fitted expected duration and fitted trading intensity
+# ---------------------------------------------------------------------------
+# Objects saved by part (b) are reloaded here so that this section can be run
+# independently of the estimation step above.
+load("acd11_results.RData")
+
+```
+
+```{r q4c-plots}
+# ---------------------------------------------------------------------------
+# Fitted expected duration and the implied trading intensity
+# ---------------------------------------------------------------------------
+# Trading intensity is defined as the reciprocal of expected duration,
+# lambda_t = 1 / psi_t, so the two panels below are exact mirror images of each
+# other by construction: long expected durations mean low trading intensity.
+par(mfrow = c(2, 1), mar = c(4, 4, 2, 1))
+
+plot(psi11, type = "l", col = "steelblue",
+     xlab = "Transaction",
+     ylab = expression(hat(psi)[t]),
+     main = "ACD(1,1): fitted expected conditional duration")
+abline(h = mean(psi11), lty = 2, col = "red")
+
+plot(1 / psi11, type = "l", col = "darkorange",
+     xlab = "Transaction",
+     ylab = expression(hat(lambda)[t] == 1 / hat(psi)[t]),
+     main = "ACD(1,1): fitted trading intensity")
+abline(h = 1 / mean(psi11), lty = 2, col = "red")
+
+par(mfrow = c(1, 1), mar = c(5, 4, 4, 2) + 0.1)
+```
+
+**Answer (c).** Comparing the two panels, the fitted trading intensity moves in the opposite
+direction to the expected duration: when expected duration is high, intensity is low, and vice versa. This
+inverse relationship follows directly from the definition of trading intensity as the reciprocal of expected
+duration,
+$$\lambda_t=\frac{1}{\psi_t},$$
+so periods of unusually slow trading (long expected durations) coincide with periods of low trading intensity. The red dashed lines mark the sample averages of the two series, and the
+mirror-image movement of the two plots is a direct consequence of this reciprocal relationship rather than an
+additional empirical finding. The principal features of the fitted series are therefore: (i) pronounced
+persistent swings between high-duration and low-duration regimes, (ii) no tendency to settle at the
+unconditional mean for long, and (iii) a trading-intensity series that is the exact mirror image of the duration
+series by construction.
+
